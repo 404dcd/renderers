@@ -14,7 +14,7 @@ import (
 	"time"
 )
 
-const FPS = 30
+const FPS = 60
 
 type WAVfile struct {
 	filepath   string
@@ -182,128 +182,68 @@ func NewWAVfile(fp string) (*WAVfile, error) {
 	return &me, nil
 }
 
-func realisticDraw(img *image.RGBA, x, y int, br uint8) {
-	start := (y * img.Stride) + (x * 4)
-	if start > 4194303 {
-		return
-	}
-	curbr := img.Pix[start]
-	if curbr == 0 {
-		img.Pix[start+3] = 255
-	}
-	if 255-curbr <= br {
-		img.Pix[start] = 255
-		img.Pix[start+1] = 255
-		img.Pix[start+2] = 255
-	} else {
-		br += curbr
-		img.Pix[start] = br
-		img.Pix[start+1] = br
-		img.Pix[start+2] = br
-	}
-}
-
-func Bresenham(img *image.RGBA, x1, y1, x2, y2 int, br uint8) {
-	var dx, dy, e, slope int
-
-	if x1 > x2 {
-		x1, y1, x2, y2 = x2, y2, x1, y1
+func lineDraw(img *image.RGBA, x1, y1, x2, y2 int, br uint8) {
+	dy := y2 - y1
+	dx := x2 - x1
+	f64dx := float64(dx)
+	tmp := f64dx / float64(dy<<1)
+	if tmp < 0 {
+		tmp *= -1
 	}
 
-	dx, dy = x2-x1, y2-y1
-	if dy < 0 {
-		dy = -dy
+	subtr := 0.5 - tmp
+	if subtr < 0 {
+		subtr *= -1
 	}
+	stridex := 0.5 + tmp - subtr
+	stridey := stridex * float64(dy) / f64dx
 
-	switch {
+	tmp2 := dx >> 63
+	dx = (dx ^ tmp2) - tmp2
+	tmp2 = dy >> 63
+	dy = (dy ^ tmp2) - tmp2
 
-	case x1 == x2 && y1 == y2:
-		realisticDraw(img, x1, y1, br)
-
-	case y1 == y2:
-		for ; dx != 0; dx-- {
-			realisticDraw(img, x1, y1, br)
-			x1++
+	x := float64(x1+x2-dx) / 2
+	y := float64(y1+y2-dy) / 2
+	if stridey < 0 {
+		y = float64(y1+y2+dy) / 2
+	}
+	boundx := (x1 + x2 + dx) / 2
+	boundy := (y1 + y2 + dy) / 2
+	intx := int(x)
+	inty := int(y)
+	if dx == 0 {
+		stridex = 0
+		stridey = 1
+	}
+	if dy == 0 {
+		stridex = 1
+		stridey = 0
+	}
+	for intx <= boundx && inty <= boundy {
+		start := (inty * img.Stride) + (intx * 4)
+		brcp := br
+		if start > 4194303 {
+			continue
 		}
-		realisticDraw(img, x1, y1, br)
-
-	case x1 == x2:
-		if y1 > y2 {
-			y1 = y2
+		curbr := img.Pix[start]
+		if curbr == 0 {
+			img.Pix[start+3] = 255
 		}
-		for ; dy != 0; dy-- {
-			realisticDraw(img, x1, y1, br)
-			y1++
-		}
-		realisticDraw(img, x1, y1, br)
-
-	case dx == dy:
-		if y1 < y2 {
-			for ; dx != 0; dx-- {
-				realisticDraw(img, x1, y1, br)
-				x1++
-				y1++
-			}
+		if 255-curbr <= brcp {
+			img.Pix[start] = 255
+			img.Pix[start+1] = 255
+			img.Pix[start+2] = 255
 		} else {
-			for ; dx != 0; dx-- {
-				realisticDraw(img, x1, y1, br)
-				x1++
-				y1--
-			}
+			brcp += curbr
+			img.Pix[start] = brcp
+			img.Pix[start+1] = brcp
+			img.Pix[start+2] = brcp
 		}
-		realisticDraw(img, x1, y1, br)
-
-	case dx > dy:
-		if y1 < y2 {
-			dy, e, slope = 2*dy, dx, 2*dx
-			for ; dx != 0; dx-- {
-				realisticDraw(img, x1, y1, br)
-				x1++
-				e -= dy
-				if e < 0 {
-					y1++
-					e += slope
-				}
-			}
-		} else {
-			dy, e, slope = 2*dy, dx, 2*dx
-			for ; dx != 0; dx-- {
-				realisticDraw(img, x1, y1, br)
-				x1++
-				e -= dy
-				if e < 0 {
-					y1--
-					e += slope
-				}
-			}
-		}
-		realisticDraw(img, x2, y2, br)
-
-	default:
-		if y1 < y2 {
-			dx, e, slope = 2*dx, dy, 2*dy
-			for ; dy != 0; dy-- {
-				realisticDraw(img, x1, y1, br)
-				y1++
-				e -= dx
-				if e < 0 {
-					x1++
-					e += slope
-				}
-			}
-		} else {
-			dx, e, slope = 2*dx, dy, 2*dy
-			for ; dy != 0; dy-- {
-				realisticDraw(img, x1, y1, br)
-				y1--
-				e -= dx
-				if e < 0 {
-					x1++
-					e += slope
-				}
-			}
-		}
-		realisticDraw(img, x2, y2, br)
+		y += stridey
+		x += stridex
+		intx = int(x + 0.5)
+		inty = int(y + 0.5)
 	}
 }
 
@@ -327,7 +267,7 @@ func plotter(pxs chan *lrLevel, frameid uint32, wg *sync.WaitGroup) {
 			bri = 0
 		}
 
-		Bresenham(img, lastx, lasty, x, y, uint8(bri))
+		_ = lineDraw //(img, lastx, lasty, x, y, uint8(bri))
 	}
 	f, err := os.Create(fmt.Sprintf("out/img%04v.png", frameid))
 	if err != nil {
